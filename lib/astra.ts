@@ -1,5 +1,4 @@
 import { AstraDB } from '@datastax/astra-db-ts';
-import type { TradeDocument } from '../types/trade';
 
 const {
   ASTRA_DB_APPLICATION_TOKEN,
@@ -19,6 +18,8 @@ export const astraDb = new AstraDB(
   ASTRA_DB_NAMESPACE,
 );
 
-export const getTradeCollection = async () => {
-  return astraDb.collection<TradeDocument>(TRADE_COLLECTION_NAME);
+export type TradeCollection = Awaited<ReturnType<AstraDB['collection']>>;
+
+export const getTradeCollection = async (): Promise<TradeCollection> => {
+  return astraDb.collection(TRADE_COLLECTION_NAME);
 };
