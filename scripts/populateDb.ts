@@ -1,64 +1,58 @@
-import { AstraDB } from "@datastax/astra-db-ts";
-import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
-import 'dotenv/config'
-import sampleData from './sample_data.json';
+import { AstraDB } from '@datastax/astra-db-ts';
+import 'dotenv/config';
 import OpenAI from 'openai';
-import { SimilarityMetric } from "../app/hooks/useConfiguration";
+import sampleTrades from './sample_trades.json';
+import { TRADE_COLLECTION_NAME } from '../lib/astra';
+import { EMBEDDING_MODEL } from '../lib/openai';
+import { buildEmbeddingText } from '../lib/trade-helpers';
+import type { TradeEntry } from '../types/trade';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const {ASTRA_DB_APPLICATION_TOKEN, ASTRA_DB_API_ENDPOINT, ASTRA_DB_NAMESPACE } = process.env;
+const { ASTRA_DB_APPLICATION_TOKEN, ASTRA_DB_API_ENDPOINT, ASTRA_DB_NAMESPACE } = process.env;
+
+if (!ASTRA_DB_APPLICATION_TOKEN || !ASTRA_DB_API_ENDPOINT || !ASTRA_DB_NAMESPACE) {
+  console.error('Missing Astra DB configuration. Set ASTRA_DB_APPLICATION_TOKEN, ASTRA_DB_API_ENDPOINT, and ASTRA_DB_NAMESPACE');
+  process.exit(1);
+}
 
 const astraDb = new AstraDB(ASTRA_DB_APPLICATION_TOKEN, ASTRA_DB_API_ENDPOINT, ASTRA_DB_NAMESPACE);
 
-const splitter = new RecursiveCharacterTextSplitter({
-  chunkSize: 1000,
-  chunkOverlap: 200,
-});
-
-const similarityMetrics: SimilarityMetric[] = [
-  'cosine',
-  'euclidean',
-  'dot_product',
-]
-
-const createCollection = async (similarity_metric: SimilarityMetric = 'cosine') => {
+const createTradeCollection = async () => {
   try {
-    const res = await astraDb.createCollection(`chat_${similarity_metric}`, {
+    await astraDb.createCollection(TRADE_COLLECTION_NAME, {
       vector: {
-        dimension: 1536,
-        metric: similarity_metric,
-      }
+        dimension: 3072,
+        metric: 'cosine',
+      },
     });
-    console.log(res);
-  } catch (e) {
-    console.log(`chat_${similarity_metric} already exists`);
+    console.log(`Created collection ${TRADE_COLLECTION_NAME}`);
+  } catch (error) {
+    console.log(`Collection ${TRADE_COLLECTION_NAME} already exists.`);
   }
 };
 
-const loadSampleData = async (similarity_metric: SimilarityMetric = 'cosine') => {
-  const collection = await astraDb.collection(`chat_${similarity_metric}`);
-  for await (const { url, title, content} of sampleData) {
-    const chunks = await splitter.splitText(content);
-    let i = 0;
-    for await (const chunk of chunks) {
-      const {data} = await openai.embeddings.create({input: chunk, model: 'text-embedding-ada-002'});
-
-      const res = await collection.insertOne({
-        document_id: `${url}-${i}`,
-        $vector: data[0]?.embedding,
-        url,
-        title,
-        content: chunk
+const seedTrades = async () => {
+  const collection = await astraDb.collection<TradeEntry>(TRADE_COLLECTION_NAME);
+  for await (const trade of sampleTrades as TradeEntry[]) {
+    try {
+      const { data } = await openai.embeddings.create({
+        input: buildEmbeddingText(trade),
+        model: EMBEDDING_MODEL,
       });
-      i++;
+
+      await collection.insertOne({
+        document_id: trade.trade_id,
+        ...trade,
+        $vector: data?.[0]?.embedding,
+      } as any);
+      console.log(`Inserted trade ${trade.trade_id}`);
+    } catch (error) {
+      console.error(`Failed to insert trade ${trade.trade_id}`, error);
     }
   }
-  console.log('data loaded');
 };
 
-similarityMetrics.forEach(metric => {
-  createCollection(metric).then(() => loadSampleData(metric));
-});
+createTradeCollection().then(seedTrades);

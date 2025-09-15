@@ -1,89 +1,364 @@
-"use client";
-import {useEffect, useRef, useState} from 'react';
-import Bubble from '../components/Bubble'
-import { useChat, Message } from 'ai/react';
-import Footer from '../components/Footer';
-import Configure from '../components/Configure';
-import PromptSuggestionRow from '../components/PromptSuggestions/PromptSuggestionsRow';
-import ThemeButton from '../components/ThemeButton';
-import useConfiguration from './hooks/useConfiguration';
+'use client';
 
+import { useEffect, useMemo, useState } from 'react';
+import NotebookPage from '@/components/journal/NotebookPage';
+import NewEntryComposer, { ComposerAttachment } from '@/components/journal/NewEntryComposer';
+import TradeEditor from '@/components/journal/TradeEditor';
+import SearchBar from '@/components/journal/SearchBar';
+import TradeNavigator from '@/components/journal/TradeNavigator';
+import AnalyticsOverlay from '@/components/analytics/AnalyticsOverlay';
+import type { SearchFilters, TradeAnalytics, TradeEntry } from '@/types/trade';
+
+interface StatusMessage {
+  type: 'success' | 'error' | 'info';
+  text: string;
+}
+
+const isWinningTrade = (trade: TradeEntry) => {
+  if (typeof trade.pnl_usd === 'number') return trade.pnl_usd > 0;
+  if (typeof trade.pnl_pct === 'number') return trade.pnl_pct > 0;
+  return false;
+};
+
+const fetchJson = async <T,>(input: RequestInfo | URL, init?: RequestInit): Promise<T> => {
+  const response = await fetch(input, init);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error ?? 'Request failed');
+  }
+  return data;
+};
 
 export default function Home() {
-  const { append, messages, input, handleInputChange, handleSubmit } = useChat();
-  const { useRag, llm, similarityMetric, setConfiguration } = useConfiguration();
+  const [trades, setTrades] = useState<TradeEntry[]>([]);
+  const [loadingTrades, setLoadingTrades] = useState(true);
+  const [processingEntry, setProcessingEntry] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<StatusMessage | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [flipDirection, setFlipDirection] = useState<'forward' | 'backward' | null>(null);
+  const [searchResults, setSearchResults] = useState<TradeEntry[] | null>(null);
+  const [searchNarrative, setSearchNarrative] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [activeFilters, setActiveFilters] = useState<SearchFilters | undefined>(undefined);
+  const [editingTrade, setEditingTrade] = useState<TradeEntry | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [analytics, setAnalytics] = useState<TradeAnalytics | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
-  const messagesEndRef = useRef(null);
-  const [configureOpen, setConfigureOpen] = useState(false);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  const visibleTrades = searchResults ?? trades;
+  const selectedTrade = visibleTrades[selectedIndex] ?? null;
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    const loadTrades = async () => {
+      try {
+        const data = await fetchJson<{ trades: TradeEntry[] }>('/api/trades');
+        setTrades(data.trades ?? []);
+        setSelectedIndex(0);
+      } catch (error) {
+        setStatusMessage({ type: 'error', text: (error as Error).message ?? 'Failed to load trades' });
+      } finally {
+        setLoadingTrades(false);
+      }
+    };
+    loadTrades();
+  }, []);
 
-  const handleSend = (e) => {
-    handleSubmit(e, { options: { body: { useRag, llm, similarityMetric}}});
-  }
+  useEffect(() => {
+    if (!statusMessage) return;
+    const timeout = setTimeout(() => setStatusMessage(null), 5000);
+    return () => clearTimeout(timeout);
+  }, [statusMessage]);
 
-  const handlePrompt = (promptText) => {
-    const msg: Message = { id: crypto.randomUUID(),  content: promptText, role: 'user' };
-    append(msg, { options: { body: { useRag, llm, similarityMetric}}});
+  useEffect(() => {
+    if (!visibleTrades.length) {
+      setSelectedIndex(0);
+      return;
+    }
+    if (selectedIndex >= visibleTrades.length) {
+      setSelectedIndex(Math.max(visibleTrades.length - 1, 0));
+    }
+  }, [visibleTrades.length, selectedIndex]);
+
+  const summary = useMemo(() => {
+    const total = trades.length;
+    const open = trades.filter((trade) => trade.status === 'open').length;
+    const closed = trades.filter((trade) => trade.status === 'closed');
+    const wins = closed.filter((trade) => isWinningTrade(trade)).length;
+    const winRate = closed.length ? (wins / closed.length) * 100 : 0;
+    const recent = trades.slice(0, 3);
+    return { total, open, winRate, recent };
+  }, [trades]);
+
+  const refreshAnalytics = async () => {
+    try {
+      setAnalyticsLoading(true);
+      const data = await fetchJson<{ analytics: TradeAnalytics }>('/api/analytics');
+      setAnalytics(data.analytics);
+    } catch (error) {
+      setStatusMessage({ type: 'error', text: (error as Error).message ?? 'Failed to load analytics' });
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  };
+
+  const openAnalytics = async () => {
+    setShowAnalytics(true);
+    await refreshAnalytics();
+  };
+
+  const updateTradeState = (updated: TradeEntry) => {
+    setTrades((prev) => {
+      const filtered = prev.filter((trade) => trade.trade_id !== updated.trade_id);
+      return [updated, ...filtered];
+    });
+    setSearchResults((prev) => {
+      if (!prev) return prev;
+      const exists = prev.some((trade) => trade.trade_id === updated.trade_id);
+      if (!exists) return prev;
+      return prev.map((trade) => (trade.trade_id === updated.trade_id ? updated : trade));
+    });
+  };
+
+  const handleCreateEntry = async ({ note, attachments }: { note: string; attachments: ComposerAttachment[] }) => {
+    setProcessingEntry(true);
+    try {
+      const data = await fetchJson<{ trade: TradeEntry; action: 'create' | 'update'; reasoning?: string }>('/api/trades', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note, attachments }),
+      });
+      updateTradeState(data.trade);
+      setSearchResults(null);
+      setSelectedIndex(0);
+      setStatusMessage({
+        type: 'success',
+        text: data.action === 'update' ? 'Existing trade updated with latest note.' : 'Trade logged in your journal!',
+      });
+    } catch (error) {
+      setStatusMessage({ type: 'error', text: (error as Error).message ?? 'Unable to process journal entry' });
+    } finally {
+      setProcessingEntry(false);
+    }
+  };
+
+  const handleSearch = async ({ query, filters }: { query: string; filters: SearchFilters }) => {
+    if (!query.trim()) {
+      setStatusMessage({ type: 'info', text: 'Enter a prompt to search the archive.' });
+      return;
+    }
+    setSearching(true);
+    try {
+      const data = await fetchJson<{ results: TradeEntry[]; answer?: string }>('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, filters, includeAnswer: true }),
+      });
+      setSearchResults(data.results ?? []);
+      setActiveFilters(filters);
+      setSearchNarrative(data.answer ?? null);
+      setSelectedIndex(0);
+      setStatusMessage({ type: 'success', text: `Found ${data.results?.length ?? 0} trades matching your query.` });
+    } catch (error) {
+      setStatusMessage({ type: 'error', text: (error as Error).message ?? 'Search failed' });
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleResetSearch = () => {
+    setSearchResults(null);
+    setActiveFilters(undefined);
+    setSearchNarrative(null);
+    setStatusMessage({ type: 'info', text: 'Search filters cleared. Showing full journal.' });
+  };
+
+  const handlePrev = () => {
+    if (selectedIndex <= 0) return;
+    setFlipDirection('backward');
+    setSelectedIndex((prev) => Math.max(prev - 1, 0));
+  };
+
+  const handleNext = () => {
+    if (selectedIndex >= visibleTrades.length - 1) return;
+    setFlipDirection('forward');
+    setSelectedIndex((prev) => Math.min(prev + 1, visibleTrades.length - 1));
+  };
+
+  const handleSelectTrade = (trade: TradeEntry, index: number) => {
+    setFlipDirection(index > selectedIndex ? 'forward' : 'backward');
+    setSelectedIndex(index);
+  };
+
+  const handleSaveEdit = async (payload: {
+    trade: Partial<TradeEntry>;
+    note?: string;
+    attachments?: ComposerAttachment[];
+    removeAttachmentIds?: string[];
+    reanalyze?: boolean;
+  }) => {
+    if (!editingTrade) return;
+    setSavingEdit(true);
+    try {
+      const data = await fetchJson<{ trade: TradeEntry }>(`/api/trades/${editingTrade.trade_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      updateTradeState(data.trade);
+      setStatusMessage({ type: 'success', text: 'Trade updated.' });
+      setEditingTrade(null);
+    } catch (error) {
+      setStatusMessage({ type: 'error', text: (error as Error).message ?? 'Failed to update trade' });
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   return (
-    <>
-    <main className="flex h-screen flex-col items-center justify-center">
-      <section className='chatbot-section flex flex-col origin:w-[800px] w-full origin:h-[735px] h-full rounded-md p-2 md:p-6'>
-        <div className='chatbot-header pb-6'>
-          <div className='flex justify-between'>
-            <div className='flex items-center gap-2'>
-              <svg width="24" height="25" viewBox="0 0 24 25">
-                <path d="M20 9.96057V7.96057C20 6.86057 19.1 5.96057 18 5.96057H15C15 4.30057 13.66 2.96057 12 2.96057C10.34 2.96057 9 4.30057 9 5.96057H6C4.9 5.96057 4 6.86057 4 7.96057V9.96057C2.34 9.96057 1 11.3006 1 12.9606C1 14.6206 2.34 15.9606 4 15.9606V19.9606C4 21.0606 4.9 21.9606 6 21.9606H18C19.1 21.9606 20 21.0606 20 19.9606V15.9606C21.66 15.9606 23 14.6206 23 12.9606C23 11.3006 21.66 9.96057 20 9.96057ZM7.5 12.4606C7.5 11.6306 8.17 10.9606 9 10.9606C9.83 10.9606 10.5 11.6306 10.5 12.4606C10.5 13.2906 9.83 13.9606 9 13.9606C8.17 13.9606 7.5 13.2906 7.5 12.4606ZM16 17.9606H8V15.9606H16V17.9606ZM15 13.9606C14.17 13.9606 13.5 13.2906 13.5 12.4606C13.5 11.6306 14.17 10.9606 15 10.9606C15.83 10.9606 16.5 11.6306 16.5 12.4606C16.5 13.2906 15.83 13.9606 15 13.9606Z" />
-              </svg>
-              <h1 className='chatbot-text-primary text-xl md:text-2xl font-medium'>Chatbot</h1>
-            </div>
-            <div className='flex gap-1'>
-              <ThemeButton />
-              <button onClick={() => setConfigureOpen(true)}>
-                <svg width="24" height="25" viewBox="0 0 24 25" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M19.14 13.4006C19.18 13.1006 19.2 12.7906 19.2 12.4606C19.2 12.1406 19.18 11.8206 19.13 11.5206L21.16 9.94057C21.34 9.80057 21.39 9.53057 21.28 9.33057L19.36 6.01057C19.24 5.79057 18.99 5.72057 18.77 5.79057L16.38 6.75057C15.88 6.37057 15.35 6.05057 14.76 5.81057L14.4 3.27057C14.36 3.03057 14.16 2.86057 13.92 2.86057H10.08C9.83999 2.86057 9.64999 3.03057 9.60999 3.27057L9.24999 5.81057C8.65999 6.05057 8.11999 6.38057 7.62999 6.75057L5.23999 5.79057C5.01999 5.71057 4.76999 5.79057 4.64999 6.01057L2.73999 9.33057C2.61999 9.54057 2.65999 9.80057 2.85999 9.94057L4.88999 11.5206C4.83999 11.8206 4.79999 12.1506 4.79999 12.4606C4.79999 12.7706 4.81999 13.1006 4.86999 13.4006L2.83999 14.9806C2.65999 15.1206 2.60999 15.3906 2.71999 15.5906L4.63999 18.9106C4.75999 19.1306 5.00999 19.2006 5.22999 19.1306L7.61999 18.1706C8.11999 18.5506 8.64999 18.8706 9.23999 19.1106L9.59999 21.6506C9.64999 21.8906 9.83999 22.0606 10.08 22.0606H13.92C14.16 22.0606 14.36 21.8906 14.39 21.6506L14.75 19.1106C15.34 18.8706 15.88 18.5506 16.37 18.1706L18.76 19.1306C18.98 19.2106 19.23 19.1306 19.35 18.9106L21.27 15.5906C21.39 15.3706 21.34 15.1206 21.15 14.9806L19.14 13.4006ZM12 16.0606C10.02 16.0606 8.39999 14.4406 8.39999 12.4606C8.39999 10.4806 10.02 8.86057 12 8.86057C13.98 8.86057 15.6 10.4806 15.6 12.4606C15.6 14.4406 13.98 16.0606 12 16.0606Z" />
-                </svg>
-              </button>
-            </div>
+    <main className="min-h-screen bg-radial text-mint">
+      <div className="mx-auto max-w-6xl px-4 py-10">
+        <header className="flex flex-col gap-4 border-b border-[#123] pb-6 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="font-mono text-4xl uppercase tracking-[0.5em] text-neon">Neon Trade Journal</h1>
+            <p className="mt-2 max-w-xl text-sm text-muted">
+              Welcome to your retro-futuristic trading log. Chronicle setups, emotions, outcomes, and let the AI distill
+              structure from the chaos.
+            </p>
           </div>
-          <p className="chatbot-text-secondary-inverse text-sm md:text-base mt-2 md:mt-4">Chatting with the Astra chatbot is a breeze! Simply type your questions or requests in a clear and concise manner. Responses are sourced from Astra documentation and a link for further reading is provided.</p>
-        </div>
-        <div className='flex-1 relative overflow-y-auto my-4 md:my-6'>
-          <div className='absolute w-full overflow-x-hidden'>
-            {messages.map((message, index) => <Bubble ref={messagesEndRef} key={`message-${index}`} content={message} />)}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="rounded-md border border-[#1b3535] bg-black/30 px-4 py-2 text-xs uppercase tracking-[0.3em] text-muted">
+              Entries {summary.total}
+            </div>
+            <button
+              onClick={openAnalytics}
+              className="rounded-md border border-neon/60 px-4 py-2 text-xs font-bold uppercase tracking-[0.35em] text-neon transition hover:bg-neon/10"
+            >
+              Analytics HUD
+            </button>
           </div>
-        </div>
-        {!messages || messages.length === 0 && (
-          <PromptSuggestionRow onPromptClick={handlePrompt} />
+        </header>
+
+        {statusMessage && (
+          <div
+            className={`mt-4 rounded-md border px-4 py-3 text-sm ${
+              statusMessage.type === 'error'
+                ? 'border-red-500/40 bg-red-500/10 text-red-200'
+                : statusMessage.type === 'success'
+                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                : 'border-neon/40 bg-neon/5 text-neon'
+            }`}
+          >
+            {statusMessage.text}
+          </div>
         )}
-        <form className='flex h-[40px] gap-2' onSubmit={handleSend}>
-          <input onChange={handleInputChange} value={input} className='chatbot-input flex-1 text-sm md:text-base outline-none bg-transparent rounded-md p-2' placeholder='Send a message...' />
-          <button type="submit" className='chatbot-send-button flex rounded-md items-center justify-center px-2.5 origin:px-3'>
-            <svg width="20" height="20" viewBox="0 0 20 20">
-              <path d="M2.925 5.025L9.18333 7.70833L2.91667 6.875L2.925 5.025ZM9.175 12.2917L2.91667 14.975V13.125L9.175 12.2917ZM1.25833 2.5L1.25 8.33333L13.75 10L1.25 11.6667L1.25833 17.5L18.75 10L1.25833 2.5Z" />
-            </svg>
-            <span className='hidden origin:block font-semibold text-sm ml-2'>Send</span>
-          </button>
-        </form>
-        <Footer />
-      </section>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,2.5fr)_minmax(0,1.5fr)]">
+          <div className="space-y-6">
+            <SearchBar
+              onSearch={handleSearch}
+              onReset={handleResetSearch}
+              searching={searching}
+              activeFilters={activeFilters}
+            />
+
+            {loadingTrades ? (
+              <div className="notebook-page flex items-center justify-center text-muted">
+                Initializing retro notebook...
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <NotebookPage trade={selectedTrade ?? null} flipDirection={flipDirection} onEdit={setEditingTrade} />
+                  <div className="mt-3 flex items-center justify-between text-[10px] uppercase tracking-[0.3em] text-muted">
+                    <button
+                      onClick={handlePrev}
+                      disabled={selectedIndex === 0}
+                      className="rounded-md border border-[#1b3535] px-3 py-1 transition hover:border-neon hover:text-neon disabled:opacity-40"
+                    >
+                      Prev Page
+                    </button>
+                    <span>
+                      Page {visibleTrades.length ? selectedIndex + 1 : 0} / {visibleTrades.length}
+                    </span>
+                    <button
+                      onClick={handleNext}
+                      disabled={selectedIndex >= visibleTrades.length - 1}
+                      className="rounded-md border border-[#1b3535] px-3 py-1 transition hover:border-neon hover:text-neon disabled:opacity-40"
+                    >
+                      Next Page
+                    </button>
+                  </div>
+                </div>
+                <TradeNavigator
+                  trades={visibleTrades}
+                  selectedId={selectedTrade?.trade_id}
+                  onSelect={handleSelectTrade}
+                  title={searchResults ? 'Search Results' : 'Ledger Index'}
+                />
+                {searchNarrative && (
+                  <div className="retro-panel p-4 text-sm text-mint/80">
+                    <h3 className="text-[11px] uppercase tracking-[0.35em] text-muted">AI Summary</h3>
+                    <p className="mt-2 whitespace-pre-line">{searchNarrative}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-6">
+            <NewEntryComposer onSubmit={handleCreateEntry} isProcessing={processingEntry} />
+            <section className="retro-panel space-y-4 p-4">
+              <h2 className="text-[11px] uppercase tracking-[0.35em] text-muted">Mission Control</h2>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-md border border-[#1f3c3c] bg-black/40 p-3">
+                  <span className="text-[10px] uppercase tracking-[0.3em] text-muted">Open</span>
+                  <p className="mt-1 text-xl font-semibold text-neon">{summary.open}</p>
+                </div>
+                <div className="rounded-md border border-[#1f3c3c] bg-black/40 p-3">
+                  <span className="text-[10px] uppercase tracking-[0.3em] text-muted">Win Rate</span>
+                  <p className="mt-1 text-xl font-semibold text-neon">{summary.winRate.toFixed(1)}%</p>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-[10px] uppercase tracking-[0.3em] text-muted">Recent Entries</h3>
+                <ul className="mt-2 space-y-2 text-sm text-muted">
+                  {summary.recent.map((trade) => (
+                    <li key={trade.trade_id} className="rounded-md border border-[#1f3c3c] bg-black/30 px-3 py-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-mint">{trade.ticker} • {trade.trade_type}</span>
+                        <span className="text-[10px] uppercase tracking-[0.3em] text-muted">{trade.status}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted">
+                        Last noted {new Date(trade.updatedAt).toLocaleString()} • PnL {trade.pnl_usd != null ? trade.pnl_usd.toFixed(2) : '—'}
+                      </p>
+                    </li>
+                  ))}
+                  {summary.recent.length === 0 && <li>No entries yet.</li>}
+                </ul>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+
+      {editingTrade && (
+        <TradeEditor
+          trade={editingTrade}
+          onClose={() => setEditingTrade(null)}
+          onSave={handleSaveEdit}
+          isSaving={savingEdit}
+        />
+      )}
+
+      {showAnalytics && (
+        <AnalyticsOverlay
+          analytics={analytics}
+          loading={analyticsLoading}
+          onClose={() => setShowAnalytics(false)}
+          onRefresh={refreshAnalytics}
+        />
+      )}
     </main>
-    <Configure
-      isOpen={configureOpen}
-      onClose={() => setConfigureOpen(false)}
-      useRag={useRag}
-      llm={llm}
-      similarityMetric={similarityMetric}
-      setConfiguration={setConfiguration}
-    />
-    </>
-  )
+  );
 }

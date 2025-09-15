@@ -1,0 +1,93 @@
+[
+  {
+    "trade_id": "demo-aapl-001",
+    "ticker": "AAPL",
+    "trade_type": "long",
+    "size": 100,
+    "entry_price": 172.35,
+    "exit_price": 178.9,
+    "pnl_pct": 3.8,
+    "pnl_usd": 655,
+    "duration_minutes": 960,
+    "rr_ratio": 2.1,
+    "sentiment": "focused",
+    "status": "closed",
+    "notes": [
+      {
+        "id": "demo-note-aapl-1",
+        "text": "Scaled into AAPL after reclaiming the 21EMA on strong volume. Risked Friday's low with target at 178.",
+        "createdAt": "2024-08-19T14:05:00.000Z"
+      },
+      {
+        "id": "demo-note-aapl-2",
+        "text": "Took partials into premarket supply and closed remainder when RSI diverged. Felt calm and methodical.",
+        "createdAt": "2024-08-20T19:30:00.000Z"
+      }
+    ],
+    "attachments": [],
+    "opened_at": "2024-08-19T14:00:00.000Z",
+    "closed_at": "2024-08-20T19:15:00.000Z",
+    "raw_summary": "Long swing on AAPL with clean trend continuation and disciplined execution.",
+    "createdAt": "2024-08-19T14:05:00.000Z",
+    "updatedAt": "2024-08-20T19:30:00.000Z"
+  },
+  {
+    "trade_id": "demo-tsla-001",
+    "ticker": "TSLA",
+    "trade_type": "short",
+    "size": 50,
+    "entry_price": 246.7,
+    "exit_price": 255.4,
+    "pnl_pct": -3.5,
+    "pnl_usd": -435,
+    "duration_minutes": 420,
+    "rr_ratio": 0.6,
+    "sentiment": "anxious",
+    "status": "closed",
+    "notes": [
+      {
+        "id": "demo-note-tsla-1",
+        "text": "Faded TSLA into daily resistance with weak market internals. Failed to respect stop after midday reversal.",
+        "createdAt": "2024-08-14T15:12:00.000Z"
+      },
+      {
+        "id": "demo-note-tsla-2",
+        "text": "Covered when price reclaimed VWAP. Took a larger than planned loss due to hesitation. Felt anxious and reactive.",
+        "createdAt": "2024-08-14T21:05:00.000Z"
+      }
+    ],
+    "attachments": [],
+    "opened_at": "2024-08-14T15:10:00.000Z",
+    "closed_at": "2024-08-14T21:00:00.000Z",
+    "raw_summary": "Short scalp that turned into an emotional hold, resulting in a controlled but disappointing loss.",
+    "createdAt": "2024-08-14T15:12:00.000Z",
+    "updatedAt": "2024-08-14T21:05:00.000Z"
+  },
+  {
+    "trade_id": "demo-nvda-001",
+    "ticker": "NVDA",
+    "trade_type": "long",
+    "size": 80,
+    "entry_price": 835.1,
+    "exit_price": null,
+    "pnl_pct": null,
+    "pnl_usd": null,
+    "duration_minutes": 180,
+    "rr_ratio": 3.2,
+    "sentiment": "optimistic",
+    "status": "open",
+    "notes": [
+      {
+        "id": "demo-note-nvda-1",
+        "text": "Initiated NVDA long on breakout of multi-day consolidation. Using 820 as risk with 870-880 target zone.",
+        "createdAt": "2024-08-21T16:45:00.000Z"
+      }
+    ],
+    "attachments": [],
+    "opened_at": "2024-08-21T16:40:00.000Z",
+    "closed_at": null,
+    "raw_summary": "Open NVDA swing aiming for fresh highs with defined risk and favorable market context.",
+    "createdAt": "2024-08-21T16:45:00.000Z",
+    "updatedAt": "2024-08-21T16:45:00.000Z"
+  }
+]
