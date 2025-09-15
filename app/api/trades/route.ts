@@ -18,7 +18,9 @@ import {
   sanitizeTradeType,
 } from '@/lib/trade-helpers';
 
-const toTradeEntry = (document: TradeDocument & { document_id?: string; $vector?: number[] }): TradeEntry => {
+type TradeDocumentRecord = TradeDocument & { document_id?: string; $vector?: number[] };
+
+const toTradeEntry = (document: TradeDocumentRecord): TradeEntry => {
   const { $vector: _vector, document_id: _docId, ...rest } = document;
   return rest;
 };
@@ -68,7 +70,7 @@ export async function GET(req: Request) {
       sort: { createdAt: -1 },
     });
 
-    const documents = await cursor.toArray();
+    const documents = (await cursor.toArray()) as TradeDocumentRecord[];
     const trades = documents.map(toTradeEntry);
 
     return NextResponse.json({ trades });
@@ -97,7 +99,7 @@ export async function POST(req: Request) {
     const collection = await getTradeCollection();
 
     const openTradesCursor = await collection.find({ status: 'open' }, { limit: 12 });
-    const openTradeDocuments = await openTradesCursor.toArray();
+    const openTradeDocuments = (await openTradesCursor.toArray()) as TradeDocumentRecord[];
     const openTrades = openTradeDocuments.map(toTradeEntry);
 
     const llmPayload = {
@@ -143,7 +145,9 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: 'Unable to identify trade to update.' }, { status: 400 });
       }
 
-      const existing = await collection.findOne({ document_id: targetTradeId });
+      const existing = (await collection.findOne({ document_id: targetTradeId })) as
+        | TradeDocumentRecord
+        | null;
       if (!existing) {
         return NextResponse.json({ error: 'Trade not found.' }, { status: 404 });
       }

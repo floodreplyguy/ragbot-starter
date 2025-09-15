@@ -2,7 +2,7 @@ import { AstraDB } from '@datastax/astra-db-ts';
 import 'dotenv/config';
 import OpenAI from 'openai';
 import sampleTrades from './sample_trades.json';
-import { TRADE_COLLECTION_NAME } from '../lib/astra';
+import { TRADE_COLLECTION_NAME, TradeCollection } from '../lib/astra';
 import { EMBEDDING_MODEL } from '../lib/openai';
 import { buildEmbeddingText } from '../lib/trade-helpers';
 import type { TradeEntry } from '../types/trade';
@@ -35,7 +35,7 @@ const createTradeCollection = async () => {
 };
 
 const seedTrades = async () => {
-  const collection = await astraDb.collection<TradeEntry>(TRADE_COLLECTION_NAME);
+  const collection = (await astraDb.collection(TRADE_COLLECTION_NAME)) as TradeCollection;
   for await (const trade of sampleTrades as TradeEntry[]) {
     try {
       const { data } = await openai.embeddings.create({
