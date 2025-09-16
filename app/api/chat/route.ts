@@ -1,6 +1,7 @@
+import { NextResponse } from 'next/server';
 import { OpenAIStream, StreamingTextResponse } from 'ai';
 import { CHAT_MODEL, EMBEDDING_MODEL, openai } from '@/lib/openai';
-import { getTradeCollection } from '@/lib/astra';
+import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
 import type { TradeEntry } from '@/types/trade';
 import { buildEmbeddingText } from '@/lib/trade-helpers';
 
@@ -17,8 +18,12 @@ export async function POST(req: Request) {
 
     let context = '';
     if (useRag && latestMessage) {
-      const { data } = await openai.embeddings.create({ input: latestMessage, model: EMBEDDING_MODEL });
       const collection = await getTradeCollection();
+      if (!collection) {
+        return NextResponse.json({ error: ASTRA_DB_MISSING_ENV_MESSAGE }, { status: 500 });
+      }
+
+      const { data } = await openai.embeddings.create({ input: latestMessage, model: EMBEDDING_MODEL });
       const cursor = await collection.find({}, {
         sort: { $vector: data?.[0]?.embedding },
         limit: 6,
@@ -50,6 +55,6 @@ If you do not have enough information, invite the user to add more detail to the
     return new StreamingTextResponse(stream);
   } catch (error) {
     console.error('Chat endpoint failed', error);
-    throw error;
+    return NextResponse.json({ error: 'Chat endpoint failed' }, { status: 500 });
   }
 }

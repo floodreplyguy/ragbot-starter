@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { CHAT_MODEL, EMBEDDING_MODEL, openai } from '@/lib/openai';
-import { getTradeCollection } from '@/lib/astra';
+import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
 import type { SearchFilters, TradeEntry } from '@/types/trade';
 import { buildEmbeddingText } from '@/lib/trade-helpers';
 
@@ -43,6 +43,13 @@ export async function POST(req: Request) {
     }
 
     const collection = await getTradeCollection();
+    if (!collection) {
+      return NextResponse.json(
+        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
+        { status: 500 },
+      );
+    }
+
     const { data } = await openai.embeddings.create({
       input: body.query,
       model: EMBEDDING_MODEL,

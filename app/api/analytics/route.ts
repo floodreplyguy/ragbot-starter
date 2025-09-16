@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getTradeCollection } from '@/lib/astra';
+import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
 import { calculateAnalytics } from '@/lib/analytics';
 import type { TradeEntry } from '@/types/trade';
 
@@ -18,6 +18,12 @@ export async function GET(req: Request) {
     }
 
     const collection = await getTradeCollection();
+    if (!collection) {
+      return NextResponse.json(
+        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
+        { status: 500 },
+      );
+    }
     const cursor = await collection.find(filter, {
       limit: Number.isNaN(limit) ? 500 : limit,
       sort: { createdAt: -1 },

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { CHAT_MODEL, EMBEDDING_MODEL, openai } from '@/lib/openai';
-import { getTradeCollection } from '@/lib/astra';
+import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
 import {
   TradeAttachment,
   TradeDocument,
@@ -65,6 +65,12 @@ export async function GET(req: Request) {
     }
 
     const collection = await getTradeCollection();
+    if (!collection) {
+      return NextResponse.json(
+        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
+        { status: 500 },
+      );
+    }
     const cursor = await collection.find(filter, {
       limit: Number.isNaN(limit) ? 200 : limit,
       sort: { createdAt: -1 },
@@ -97,6 +103,12 @@ export async function POST(req: Request) {
 
     const sanitizedAttachments = normalizeAttachments(attachments);
     const collection = await getTradeCollection();
+    if (!collection) {
+      return NextResponse.json(
+        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
+        { status: 500 },
+      );
+    }
 
     const openTradesCursor = await collection.find({ status: 'open' }, { limit: 12 });
     const openTradeDocuments = (await openTradesCursor.toArray()) as TradeDocumentRecord[];

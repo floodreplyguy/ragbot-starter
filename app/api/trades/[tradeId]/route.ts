@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Params } from 'next/dist/shared/lib/router/utils/route-matcher';
-import { getTradeCollection } from '@/lib/astra';
+import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
 import { CHAT_MODEL, EMBEDDING_MODEL, openai } from '@/lib/openai';
 import type { TradeAttachment, TradeEntry } from '@/types/trade';
 import {
@@ -30,6 +30,12 @@ const embed = async (trade: TradeEntry) => {
 export async function GET(_req: Request, context: { params: Params }) {
   try {
     const collection = await getTradeCollection();
+    if (!collection) {
+      return NextResponse.json(
+        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
+        { status: 500 },
+      );
+    }
     const document = await collection.findOne({ document_id: context.params.tradeId });
 
     if (!document) {
@@ -63,6 +69,12 @@ export async function PUT(req: Request, context: { params: Params }) {
     } = body;
 
     const collection = await getTradeCollection();
+    if (!collection) {
+      return NextResponse.json(
+        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
+        { status: 500 },
+      );
+    }
     const existingDocument = await collection.findOne({ document_id: context.params.tradeId });
 
     if (!existingDocument) {
@@ -167,6 +179,12 @@ export async function PUT(req: Request, context: { params: Params }) {
 export async function DELETE(_req: Request, context: { params: Params }) {
   try {
     const collection = await getTradeCollection();
+    if (!collection) {
+      return NextResponse.json(
+        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
+        { status: 500 },
+      );
+    }
     await collection.deleteOne({ document_id: context.params.tradeId });
     return NextResponse.json({ ok: true });
   } catch (error) {
