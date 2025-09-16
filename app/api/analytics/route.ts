@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
+import { getTradeCollection } from '@/lib/astra';
 import { calculateAnalytics } from '@/lib/analytics';
 import type { TradeEntry } from '@/types/trade';
+import { listTrades as listMemoryTrades } from '@/lib/memory-trade-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,25 +21,28 @@ export async function GET(req: NextRequest) {
     }
 
     const collection = await getTradeCollection();
-    if (!collection) {
-      return NextResponse.json(
-        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
-        { status: 500 },
-      );
-    }
-    const cursor = await collection.find(filter, {
-      limit: Number.isNaN(limit) ? 500 : limit,
-      sort: { createdAt: -1 },
-    });
-    const documents = await cursor.toArray();
+    let trades: TradeEntry[] = [];
+    if (collection) {
+      const cursor = await collection.find(filter, {
+        limit: Number.isNaN(limit) ? 500 : limit,
+        sort: { createdAt: -1 },
+      });
+      const documents = await cursor.toArray();
 
-    const trades = documents.map((document) => {
-      const { $vector: _vector, document_id: _docId, ...rest } = document as TradeEntry & {
-        $vector?: number[];
-        document_id?: string;
-      };
-      return rest as TradeEntry;
-    });
+      trades = documents.map((document) => {
+        const { $vector: _vector, document_id: _docId, ...rest } = document as TradeEntry & {
+          $vector?: number[];
+          document_id?: string;
+        };
+        return rest as TradeEntry;
+      });
+    } else {
+      trades = listMemoryTrades(filter, {
+        limit: Number.isNaN(limit) ? 500 : limit,
+        sortBy: 'createdAt',
+        direction: 'desc',
+      });
+    }
 
     const analytics = calculateAnalytics(trades);
     return NextResponse.json({ analytics, count: trades.length });

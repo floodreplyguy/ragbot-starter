@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { CHAT_MODEL, EMBEDDING_MODEL, openai } from '@/lib/openai';
-import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
+import { getTradeCollection } from '@/lib/astra';
 import {
   TradeAttachment,
   TradeDocument,
@@ -19,6 +19,11 @@ import {
   sanitizeTicker,
   sanitizeTradeType,
 } from '@/lib/trade-helpers';
+import {
+  getTradeById as getMemoryTradeById,
+  listTrades as listMemoryTrades,
+  upsertTrade as upsertMemoryTrade,
+} from '@/lib/memory-trade-store';
 
 type TradeDocumentRecord = TradeDocument & { document_id?: string; $vector?: number[] };
 
@@ -251,10 +256,12 @@ export async function GET(req: NextRequest) {
 
     const collection = await getTradeCollection();
     if (!collection) {
-      return NextResponse.json(
-        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
-        { status: 500 },
-      );
+      const trades = listMemoryTrades(filter, {
+        limit: Number.isNaN(limit) ? 200 : limit,
+        sortBy: 'createdAt',
+        direction: 'desc',
+      });
+      return NextResponse.json({ trades });
     }
     const cursor = await collection.find(filter, {
       limit: Number.isNaN(limit) ? 200 : limit,
@@ -288,16 +295,17 @@ export async function POST(req: NextRequest) {
 
     const sanitizedAttachments = normalizeAttachments(attachments);
     const collection = await getTradeCollection();
-    if (!collection) {
-      return NextResponse.json(
-        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
-        { status: 500 },
+    let resolvedOpenTrades: TradeEntry[] = [];
+    if (collection) {
+      const openTradesCursor = await collection.find({ status: 'open' }, { limit: 12 });
+      const openTradeDocuments = (await openTradesCursor.toArray()) as TradeDocumentRecord[];
+      resolvedOpenTrades = openTradeDocuments.map(toTradeEntry);
+    } else {
+      resolvedOpenTrades = listMemoryTrades(
+        { status: 'open' },
+        { limit: 12, sortBy: 'updatedAt', direction: 'desc' },
       );
     }
-
-    const openTradesCursor = await collection.find({ status: 'open' }, { limit: 12 });
-    const openTradeDocuments = (await openTradesCursor.toArray()) as TradeDocumentRecord[];
-    const openTrades = openTradeDocuments.map(toTradeEntry);
 
     const resolvedTradeId = tradeId?.trim() ? tradeId.trim() : undefined;
 
@@ -307,7 +315,7 @@ export async function POST(req: NextRequest) {
         const llmPayload = {
           note,
           forcedTargetId: resolvedTradeId ?? null,
-          openTrades: collectOpenTradeContext(openTrades),
+          openTrades: collectOpenTradeContext(resolvedOpenTrades),
           instructions:
             'Analyse the note, decide whether to create a new trade or update an existing open trade. '
             + 'If the user supplied forcedTargetId use it for the update. '
@@ -344,7 +352,7 @@ export async function POST(req: NextRequest) {
 
     if (!extraction) {
       extraction = TradeExtractionSchema.parse(
-        buildFallbackExtraction(note, resolvedTradeId, openTrades),
+        buildFallbackExtraction(note, resolvedTradeId, resolvedOpenTrades),
       );
     }
 
@@ -358,55 +366,68 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Unable to identify trade to update.' }, { status: 400 });
       }
 
-      const existing = (await collection.findOne({ document_id: targetTradeId })) as
-        | TradeDocumentRecord
-        | null;
-      if (!existing) {
+      let existingTrade: TradeEntry | null = null;
+      if (collection) {
+        const document = (await collection.findOne({ document_id: targetTradeId })) as
+          | TradeDocumentRecord
+          | null;
+        if (!document) {
+          return NextResponse.json({ error: 'Trade not found.' }, { status: 404 });
+        }
+        existingTrade = toTradeEntry(document);
+      } else {
+        existingTrade = getMemoryTradeById(targetTradeId);
+      }
+
+      if (!existingTrade) {
         return NextResponse.json({ error: 'Trade not found.' }, { status: 404 });
       }
 
-      const existingEntry = toTradeEntry(existing);
-      const mergedNotes = mergeNotes(existingEntry.notes, [createNote(note)]);
-      const mergedAttachments = mergeAttachments(existingEntry.attachments, sanitizedAttachments);
+      const mergedNotes = mergeNotes(existingTrade.notes, [createNote(note)]);
+      const mergedAttachments = mergeAttachments(existingTrade.attachments, sanitizedAttachments);
 
-      const updatedStatus = sanitizeStatus(extraction.trade.status ?? existingEntry.status);
+      const updatedStatus = sanitizeStatus(extraction.trade.status ?? existingTrade.status);
       const updatedTrade: TradeEntry = {
-        ...existingEntry,
-        ticker: sanitizeTicker(extraction.trade.ticker ?? existingEntry.ticker),
-        trade_type: sanitizeTradeType(extraction.trade.trade_type ?? existingEntry.trade_type),
-        size: extraction.trade.size ?? existingEntry.size ?? null,
-        entry_price: extraction.trade.entry_price ?? existingEntry.entry_price ?? null,
-        exit_price: extraction.trade.exit_price ?? existingEntry.exit_price ?? null,
-        pnl_pct: extraction.trade.pnl_pct ?? existingEntry.pnl_pct ?? null,
-        pnl_usd: extraction.trade.pnl_usd ?? existingEntry.pnl_usd ?? null,
+        ...existingTrade,
+        ticker: sanitizeTicker(extraction.trade.ticker ?? existingTrade.ticker),
+        trade_type: sanitizeTradeType(extraction.trade.trade_type ?? existingTrade.trade_type),
+        size: extraction.trade.size ?? existingTrade.size ?? null,
+        entry_price: extraction.trade.entry_price ?? existingTrade.entry_price ?? null,
+        exit_price: extraction.trade.exit_price ?? existingTrade.exit_price ?? null,
+        pnl_pct: extraction.trade.pnl_pct ?? existingTrade.pnl_pct ?? null,
+        pnl_usd: extraction.trade.pnl_usd ?? existingTrade.pnl_usd ?? null,
         duration_minutes:
-          extraction.trade.duration_minutes ?? existingEntry.duration_minutes ?? null,
-        rr_ratio: extraction.trade.rr_ratio ?? existingEntry.rr_ratio ?? null,
-        sentiment: extraction.trade.sentiment ?? existingEntry.sentiment ?? null,
+          extraction.trade.duration_minutes ?? existingTrade.duration_minutes ?? null,
+        rr_ratio: extraction.trade.rr_ratio ?? existingTrade.rr_ratio ?? null,
+        sentiment: extraction.trade.sentiment ?? existingTrade.sentiment ?? null,
         status: updatedStatus,
         notes: mergedNotes,
         attachments: mergedAttachments,
-        opened_at: extraction.trade.opened_at ?? existingEntry.opened_at ?? now,
+        opened_at: extraction.trade.opened_at ?? existingTrade.opened_at ?? now,
         closed_at:
           updatedStatus === 'closed'
-            ? extraction.trade.closed_at ?? existingEntry.closed_at ?? now
+            ? extraction.trade.closed_at ?? existingTrade.closed_at ?? now
             : null,
-        raw_summary: extraction.trade.raw_summary ?? existingEntry.raw_summary ?? null,
+        raw_summary: extraction.trade.raw_summary ?? existingTrade.raw_summary ?? null,
         updatedAt: now,
-        createdAt: existingEntry.createdAt,
+        createdAt: existingTrade.createdAt,
       };
 
-      const embedding = await embedTrade(updatedTrade);
-      const vectorFields = embedding ? { $vector: embedding } : {};
-      await collection.updateOne(
-        { document_id: targetTradeId },
-        {
-          $set: {
-            ...updatedTrade,
-            ...vectorFields,
+      if (collection) {
+        const embedding = await embedTrade(updatedTrade);
+        const vectorFields = embedding ? { $vector: embedding } : {};
+        await collection.updateOne(
+          { document_id: targetTradeId },
+          {
+            $set: {
+              ...updatedTrade,
+              ...vectorFields,
+            },
           },
-        },
-      );
+        );
+      } else {
+        upsertMemoryTrade(updatedTrade);
+      }
 
       return NextResponse.json({
         action: 'update',
@@ -442,14 +463,18 @@ export async function POST(req: NextRequest) {
       updatedAt: now,
     };
 
-    const embedding = await embedTrade(newTrade);
-    const vectorFields = embedding ? { $vector: embedding } : {};
+    if (collection) {
+      const embedding = await embedTrade(newTrade);
+      const vectorFields = embedding ? { $vector: embedding } : {};
 
-    await collection.insertOne({
-      document_id: trade_id,
-      ...newTrade,
-      ...vectorFields,
-    });
+      await collection.insertOne({
+        document_id: trade_id,
+        ...newTrade,
+        ...vectorFields,
+      });
+    } else {
+      upsertMemoryTrade(newTrade);
+    }
 
     return NextResponse.json({
       action: 'create',

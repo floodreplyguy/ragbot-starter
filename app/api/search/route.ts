@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import { CHAT_MODEL, EMBEDDING_MODEL, openai } from '@/lib/openai';
-import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
+import { getTradeCollection } from '@/lib/astra';
 import type { SearchFilters, TradeEntry } from '@/types/trade';
 import { buildEmbeddingText } from '@/lib/trade-helpers';
+import {
+  buildSearchAnswer as buildMemorySearchAnswer,
+  searchTrades as searchMemoryTrades,
+} from '@/lib/memory-trade-store';
 
 interface SearchRequest {
   query: string;
@@ -42,23 +46,37 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Query text is required.' }, { status: 400 });
     }
 
+    const limit = body.limit ?? 15;
     const collection = await getTradeCollection();
-    if (!collection) {
-      return NextResponse.json(
-        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
-        { status: 500 },
-      );
+    const filter = buildFilter(body.filters);
+
+    if (!collection || !process.env.OPENAI_API_KEY) {
+      const results = searchMemoryTrades(body.query, filter, limit);
+      const answer = body.includeAnswer
+        ? buildMemorySearchAnswer(body.query, results)
+        : null;
+      return NextResponse.json({ results, ...(answer ? { answer } : {}) });
     }
 
-    const { data } = await openai.embeddings.create({
-      input: body.query,
-      model: EMBEDDING_MODEL,
-    });
+    let embedding;
+    try {
+      const { data } = await openai.embeddings.create({
+        input: body.query,
+        model: EMBEDDING_MODEL,
+      });
+      embedding = data?.[0]?.embedding;
+    } catch (error) {
+      console.error('Search embedding failed, using heuristic fallback', error);
+      const results = searchMemoryTrades(body.query, filter, limit);
+      const answer = body.includeAnswer
+        ? buildMemorySearchAnswer(body.query, results)
+        : null;
+      return NextResponse.json({ results, ...(answer ? { answer } : {}) });
+    }
 
-    const filter = buildFilter(body.filters);
     const cursor = await collection.find(filter, {
-      sort: { $vector: data?.[0]?.embedding },
-      limit: body.limit ?? 15,
+      sort: { $vector: embedding },
+      limit,
     });
 
     const documents = await cursor.toArray();
@@ -66,27 +84,32 @@ export async function POST(req: Request) {
 
     let answer: string | null = null;
     if (body.includeAnswer) {
-      const context = trades.slice(0, 8).map((trade) => buildEmbeddingText(trade));
-      const completion = await openai.chat.completions.create({
-        model: CHAT_MODEL,
-        temperature: 0.2,
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are a trading journal analyst. Use the provided trade context to answer the query. '
-              + 'If unsure, summarise relevant trades without fabricating data.',
-          },
-          {
-            role: 'user',
-            content: `Query: ${body.query}\nTrades:\n${context.join('\n---\n')}`,
-          },
-        ],
-      });
-      answer = completion.choices?.[0]?.message?.content ?? null;
+      try {
+        const context = trades.slice(0, 8).map((trade) => buildEmbeddingText(trade));
+        const completion = await openai.chat.completions.create({
+          model: CHAT_MODEL,
+          temperature: 0.2,
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are a trading journal analyst. Use the provided trade context to answer the query. '
+                + 'If unsure, summarise relevant trades without fabricating data.',
+            },
+            {
+              role: 'user',
+              content: `Query: ${body.query}\nTrades:\n${context.join('\n---\n')}`,
+            },
+          ],
+        });
+        answer = completion.choices?.[0]?.message?.content ?? null;
+      } catch (error) {
+        console.error('Search answer generation failed, falling back to heuristic summary', error);
+        answer = buildMemorySearchAnswer(body.query, trades);
+      }
     }
 
-    return NextResponse.json({ results: trades, answer });
+    return NextResponse.json({ results: trades, ...(answer ? { answer } : {}) });
   } catch (error) {
     console.error('Search failed', error);
     return NextResponse.json({ error: 'Search failed' }, { status: 500 });

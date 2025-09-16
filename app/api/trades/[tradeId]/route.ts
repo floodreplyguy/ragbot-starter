@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Params } from 'next/dist/shared/lib/router/utils/route-matcher';
-import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
+import { getTradeCollection } from '@/lib/astra';
 import { CHAT_MODEL, EMBEDDING_MODEL, openai } from '@/lib/openai';
 import type { TradeAttachment, TradeEntry } from '@/types/trade';
 import {
@@ -13,6 +13,11 @@ import {
   sanitizeTicker,
   sanitizeTradeType,
 } from '@/lib/trade-helpers';
+import {
+  deleteTrade as deleteMemoryTrade,
+  getTradeById as getMemoryTradeById,
+  upsertTrade as upsertMemoryTrade,
+} from '@/lib/memory-trade-store';
 
 const toTradeEntry = (document: TradeEntry & { $vector?: number[]; document_id?: string }): TradeEntry => {
   const { $vector: _vector, document_id: _docId, ...rest } = document;
@@ -20,21 +25,30 @@ const toTradeEntry = (document: TradeEntry & { $vector?: number[]; document_id?:
 };
 
 const embed = async (trade: TradeEntry) => {
-  const { data } = await openai.embeddings.create({
-    model: EMBEDDING_MODEL,
-    input: buildEmbeddingText(trade),
-  });
-  return data?.[0]?.embedding;
+  if (!process.env.OPENAI_API_KEY) {
+    return null;
+  }
+  try {
+    const { data } = await openai.embeddings.create({
+      model: EMBEDDING_MODEL,
+      input: buildEmbeddingText(trade),
+    });
+    return data?.[0]?.embedding ?? null;
+  } catch (error) {
+    console.error('Failed to generate embedding for trade update', error);
+    return null;
+  }
 };
 
 export async function GET(_req: Request, context: { params: Params }) {
   try {
     const collection = await getTradeCollection();
     if (!collection) {
-      return NextResponse.json(
-        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
-        { status: 500 },
-      );
+      const trade = getMemoryTradeById(context.params.tradeId);
+      if (!trade) {
+        return NextResponse.json({ error: 'Trade not found' }, { status: 404 });
+      }
+      return NextResponse.json({ trade });
     }
     const document = await collection.findOne({ document_id: context.params.tradeId });
 
@@ -69,19 +83,20 @@ export async function PUT(req: Request, context: { params: Params }) {
     } = body;
 
     const collection = await getTradeCollection();
-    if (!collection) {
-      return NextResponse.json(
-        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
-        { status: 500 },
-      );
+    let existing: TradeEntry | null = null;
+    if (collection) {
+      const existingDocument = await collection.findOne({ document_id: context.params.tradeId });
+      if (!existingDocument) {
+        return NextResponse.json({ error: 'Trade not found' }, { status: 404 });
+      }
+      existing = toTradeEntry(existingDocument as TradeEntry);
+    } else {
+      existing = getMemoryTradeById(context.params.tradeId);
     }
-    const existingDocument = await collection.findOne({ document_id: context.params.tradeId });
 
-    if (!existingDocument) {
+    if (!existing) {
       return NextResponse.json({ error: 'Trade not found' }, { status: 404 });
     }
-
-    const existing = toTradeEntry(existingDocument as TradeEntry);
     const now = new Date().toISOString();
 
     const cleanedAttachments = normalizeAttachments(attachments);
@@ -116,7 +131,7 @@ export async function PUT(req: Request, context: { params: Params }) {
       createdAt: existing.createdAt,
     };
 
-    if (reanalyze && note) {
+    if (reanalyze && note && process.env.OPENAI_API_KEY) {
       const completion = await openai.chat.completions.create({
         model: CHAT_MODEL,
         temperature: 0,
@@ -157,17 +172,22 @@ export async function PUT(req: Request, context: { params: Params }) {
       }
     }
 
-    const embedding = await embed(updatedTrade);
+    if (collection) {
+      const embedding = await embed(updatedTrade);
+      const vectorFields = embedding ? { $vector: embedding } : {};
 
-    await collection.updateOne(
-      { document_id: context.params.tradeId },
-      {
-        $set: {
-          ...updatedTrade,
-          $vector: embedding,
+      await collection.updateOne(
+        { document_id: context.params.tradeId },
+        {
+          $set: {
+            ...updatedTrade,
+            ...vectorFields,
+          },
         },
-      },
-    );
+      );
+    } else {
+      upsertMemoryTrade(updatedTrade);
+    }
 
     return NextResponse.json({ trade: updatedTrade });
   } catch (error) {
@@ -179,13 +199,11 @@ export async function PUT(req: Request, context: { params: Params }) {
 export async function DELETE(_req: Request, context: { params: Params }) {
   try {
     const collection = await getTradeCollection();
-    if (!collection) {
-      return NextResponse.json(
-        { error: ASTRA_DB_MISSING_ENV_MESSAGE },
-        { status: 500 },
-      );
+    if (collection) {
+      await collection.deleteOne({ document_id: context.params.tradeId });
+    } else {
+      deleteMemoryTrade(context.params.tradeId);
     }
-    await collection.deleteOne({ document_id: context.params.tradeId });
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error('Failed to delete trade', error);

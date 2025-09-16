@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { OpenAIStream, StreamingTextResponse } from 'ai';
 import { CHAT_MODEL, EMBEDDING_MODEL, openai } from '@/lib/openai';
-import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
+import { getTradeCollection } from '@/lib/astra';
 import type { TradeEntry } from '@/types/trade';
 import { buildEmbeddingText } from '@/lib/trade-helpers';
+import { getRelevantTrades as getFallbackTrades } from '@/lib/memory-trade-store';
 
 const toTrade = (document: TradeEntry & { $vector?: number[]; document_id?: string }) => {
   const { $vector: _vector, document_id: _docId, ...rest } = document;
@@ -14,25 +15,53 @@ export async function POST(req: Request) {
   try {
     const { messages, useRag = true } = await req.json();
 
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        {
+          error:
+            'OPENAI_API_KEY is not configured. Add it to your environment to enable AI conversations.',
+        },
+        { status: 500 },
+      );
+    }
+
     const latestMessage = messages?.[messages.length - 1]?.content ?? '';
 
     let context = '';
     if (useRag && latestMessage) {
       const collection = await getTradeCollection();
-      if (!collection) {
-        return NextResponse.json({ error: ASTRA_DB_MISSING_ENV_MESSAGE }, { status: 500 });
-      }
-
-      const { data } = await openai.embeddings.create({ input: latestMessage, model: EMBEDDING_MODEL });
-      const cursor = await collection.find({}, {
-        sort: { $vector: data?.[0]?.embedding },
-        limit: 6,
-      });
-      const documents = await cursor.toArray();
-      const trades = documents.map((document) => toTrade(document as TradeEntry));
-      if (trades.length) {
-        const formatted = trades.map((trade, index) => `Trade ${index + 1}: ${buildEmbeddingText(trade)}`).join('\n---\n');
-        context = `Relevant trades:\n${formatted}`;
+      if (collection) {
+        try {
+          const { data } = await openai.embeddings.create({
+            input: latestMessage,
+            model: EMBEDDING_MODEL,
+          });
+          const cursor = await collection.find(
+            {},
+            {
+              sort: { $vector: data?.[0]?.embedding },
+              limit: 6,
+            },
+          );
+          const documents = await cursor.toArray();
+          const trades = documents.map((document) => toTrade(document as TradeEntry));
+          if (trades.length) {
+            const formatted = trades
+              .map((trade, index) => `Trade ${index + 1}: ${buildEmbeddingText(trade)}`)
+              .join('\n---\n');
+            context = `Relevant trades:\n${formatted}`;
+          }
+        } catch (error) {
+          console.error('Failed to build RAG context, continuing without database results', error);
+        }
+      } else {
+        const trades = getFallbackTrades(latestMessage, 6);
+        if (trades.length) {
+          const formatted = trades
+            .map((trade, index) => `Trade ${index + 1}: ${buildEmbeddingText(trade)}`)
+            .join('\n---\n');
+          context = `Relevant trades:\n${formatted}`;
+        }
       }
     }
 
