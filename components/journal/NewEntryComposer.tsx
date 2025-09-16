@@ -183,7 +183,7 @@ export default function NewEntryComposer({ onSubmit, isProcessing }: NewEntryCom
             type="submit"
             disabled={!note.trim() || isProcessing}
             className={clsx(
-              'rounded-md bg-neon/80 px-4 py-2 text-xs font-bold uppercase tracking-[0.3em] text-black transition hover:bg-neon',
+              'rounded-md bg-neon/80 px-4 py-2 text-xs font-bold uppercase tracking-[0.3em] text-ink transition hover:bg-neon',
               (!note.trim() || isProcessing) && 'opacity-50',
             )}
           >
