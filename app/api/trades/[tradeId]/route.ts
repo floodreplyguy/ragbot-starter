@@ -25,7 +25,7 @@ const toTradeEntry = (document: TradeEntry & { $vector?: number[]; document_id?:
 };
 
 const embed = async (trade: TradeEntry) => {
-  if (!process.env.OPENAI_API_KEY) {
+  if (!openai) {
     return null;
   }
   try {
@@ -131,7 +131,7 @@ export async function PUT(req: Request, context: { params: Params }) {
       createdAt: existing.createdAt,
     };
 
-    if (reanalyze && note && process.env.OPENAI_API_KEY) {
+    if (reanalyze && note && openai) {
       const completion = await openai.chat.completions.create({
         model: CHAT_MODEL,
         temperature: 0,

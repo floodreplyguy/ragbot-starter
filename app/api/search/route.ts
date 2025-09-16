@@ -50,7 +50,7 @@ export async function POST(req: Request) {
     const collection = await getTradeCollection();
     const filter = buildFilter(body.filters);
 
-    if (!collection || !process.env.OPENAI_API_KEY) {
+    if (!collection || !openai) {
       const results = searchMemoryTrades(body.query, filter, limit);
       const answer = body.includeAnswer
         ? buildMemorySearchAnswer(body.query, results)

@@ -15,7 +15,7 @@ export async function POST(req: Request) {
   try {
     const { messages, useRag = true } = await req.json();
 
-    if (!process.env.OPENAI_API_KEY) {
+    if (!openai) {
       return NextResponse.json(
         {
           error:

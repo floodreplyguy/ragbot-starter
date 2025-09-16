@@ -33,7 +33,7 @@ const toTradeEntry = (document: TradeDocumentRecord): TradeEntry => {
 };
 
 const embedTrade = async (trade: TradeEntry): Promise<number[] | null> => {
-  if (!process.env.OPENAI_API_KEY) {
+  if (!openai) {
     return null;
   }
   try {
@@ -310,7 +310,7 @@ export async function POST(req: NextRequest) {
     const resolvedTradeId = tradeId?.trim() ? tradeId.trim() : undefined;
 
     let extraction: TradeExtraction | null = null;
-    if (process.env.OPENAI_API_KEY) {
+    if (openai) {
       try {
         const llmPayload = {
           note,
