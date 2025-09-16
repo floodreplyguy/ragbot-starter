@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { CHAT_MODEL, EMBEDDING_MODEL, openai } from '@/lib/openai';
 import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
 import {
@@ -44,15 +44,15 @@ const collectOpenTradeContext = (trades: TradeEntry[]) =>
     latest_note: trade.notes.at(-1)?.text ?? '',
   }));
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   try {
-    const url = new URL(req.url);
-    const status = url.searchParams.get('status');
-    const ticker = url.searchParams.get('ticker');
-    const sentiment = url.searchParams.get('sentiment');
-    const from = url.searchParams.get('from');
-    const to = url.searchParams.get('to');
-    const limit = Number(url.searchParams.get('limit') ?? '200');
+    const searchParams = req.nextUrl.searchParams;
+    const status = searchParams.get('status');
+    const ticker = searchParams.get('ticker');
+    const sentiment = searchParams.get('sentiment');
+    const from = searchParams.get('from');
+    const to = searchParams.get('to');
+    const limit = Number(searchParams.get('limit') ?? '200');
 
     const filter: Record<string, unknown> = {};
     if (status) filter.status = status;
@@ -92,7 +92,7 @@ interface TradeRequestBody {
   tradeId?: string;
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as TradeRequestBody;
     const { note, attachments = [], tradeId } = body;
