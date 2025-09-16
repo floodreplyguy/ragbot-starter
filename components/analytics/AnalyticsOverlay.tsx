@@ -52,7 +52,7 @@ export default function AnalyticsOverlay({ analytics, loading, onClose, onRefres
             </button>
             <button
               onClick={onClose}
-              className="rounded-md bg-neon/80 px-4 py-2 text-xs font-bold uppercase tracking-[0.3em] text-black transition hover:bg-neon"
+              className="rounded-md bg-neon/80 px-4 py-2 text-xs font-bold uppercase tracking-[0.3em] text-ink transition hover:bg-neon"
             >
               Close
             </button>

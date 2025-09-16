@@ -376,7 +376,7 @@ export default function TradeEditor({ trade, onClose, onSave, isSaving }: TradeE
             type="submit"
             disabled={isSaving}
             className={clsx(
-              'rounded-md bg-neon/80 px-5 py-2 text-xs font-bold uppercase tracking-[0.35em] text-black transition hover:bg-neon',
+              'rounded-md bg-neon/80 px-5 py-2 text-xs font-bold uppercase tracking-[0.35em] text-ink transition hover:bg-neon',
               isSaving && 'opacity-50',
             )}
           >

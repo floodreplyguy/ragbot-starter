@@ -4,10 +4,14 @@
 
 :root {
   --neon: #4dd0b3;
+  --color-neon: 77 208 179;
   --neon-soft: rgba(77, 208, 179, 0.2);
   --mint: #d4fff2;
+  --color-mint: 212 255 242;
   --muted: #5f8383;
+  --color-muted: 95 131 131;
   --ink: #010607;
+  --color-ink: 1 6 7;
   --panel: rgba(6, 18, 21, 0.85);
   --panel-border: rgba(39, 90, 90, 0.4);
   --page: rgba(9, 24, 28, 0.75);
@@ -33,6 +37,10 @@ body {
 
 .text-mint {
   color: var(--mint);
+}
+
+.text-ink {
+  color: var(--ink);
 }
 
 .text-muted {
