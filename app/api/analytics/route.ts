@@ -3,6 +3,8 @@ import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
 import { calculateAnalytics } from '@/lib/analytics';
 import type { TradeEntry } from '@/types/trade';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: NextRequest) {
   try {
     const searchParams = req.nextUrl.searchParams;
