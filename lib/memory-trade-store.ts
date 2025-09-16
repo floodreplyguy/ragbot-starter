@@ -82,7 +82,7 @@ const compareWithOperator = (
 const matchesFilter = (trade: TradeEntry, filter: FilterRecord): boolean => {
   return Object.entries(filter).every(([key, condition]) => {
     if (condition == null) return true;
-    const value = (trade as Record<string, unknown>)[key];
+    const value: unknown = key in trade ? trade[key as keyof TradeEntry] : undefined;
 
     if (typeof condition === 'object' && !Array.isArray(condition)) {
       const conditionRecord = condition as Record<string, unknown>;
@@ -121,8 +121,8 @@ const sortTrades = (
   const key = sortBy === 'updatedAt' ? 'updatedAt' : 'createdAt';
   const multiplier = direction === 'asc' ? 1 : -1;
   return [...trades].sort((a, b) => {
-    const left = toComparable((a as Record<string, unknown>)[key]) ?? 0;
-    const right = toComparable((b as Record<string, unknown>)[key]) ?? 0;
+    const left = toComparable(a[key]) ?? 0;
+    const right = toComparable(b[key]) ?? 0;
     if (left === right) return 0;
     return left > right ? multiplier : -multiplier;
   });
