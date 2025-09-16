@@ -1,14 +1,14 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { ASTRA_DB_MISSING_ENV_MESSAGE, getTradeCollection } from '@/lib/astra';
 import { calculateAnalytics } from '@/lib/analytics';
 import type { TradeEntry } from '@/types/trade';
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   try {
-    const url = new URL(req.url);
-    const from = url.searchParams.get('from');
-    const to = url.searchParams.get('to');
-    const limit = Number(url.searchParams.get('limit') ?? '500');
+    const searchParams = req.nextUrl.searchParams;
+    const from = searchParams.get('from');
+    const to = searchParams.get('to');
+    const limit = Number(searchParams.get('limit') ?? '500');
 
     const filter: Record<string, unknown> = {};
     if (from || to) {
